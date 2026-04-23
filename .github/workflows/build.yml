@@ -14,16 +14,40 @@ jobs:
         include:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            artifact-suffix: windows-x64
           - platform: macos-latest
             target: aarch64-apple-darwin
+            artifact-suffix: macos-arm64
           - platform: macos-13
             target: x86_64-apple-darwin
+            artifact-suffix: macos-x64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact-suffix: linux-x64
 
     runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,41 +62,103 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # macOS needs Xcode command line tools (pre-installed on GitHub runners)
-      # Windows needs no extra setup
-
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@^2
-
       - name: Build Tauri app
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        run: npx @tauri-apps/cli@^2 build --target ${{ matrix.target }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
-      # Upload Windows installers
+      # ── Windows artifacts ────────────────────────────────────────────────
       - name: Upload MSI (Windows)
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: portpal-windows-msi
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          name: portpal-${{ matrix.artifact-suffix }}-msi
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+          if-no-files-found: error
 
-      - name: Upload NSIS installer (Windows)
+      - name: Upload NSIS setup (Windows)
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: portpal-windows-setup
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          name: portpal-${{ matrix.artifact-suffix }}-setup
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
-      # Upload macOS installers
+      # ── macOS artifacts ──────────────────────────────────────────────────
       - name: Upload DMG (macOS)
         if: startsWith(matrix.platform, 'macos')
         uses: actions/upload-artifact@v4
         with:
-          name: portpal-macos-${{ matrix.target }}-dmg
+          name: portpal-${{ matrix.artifact-suffix }}-dmg
           path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
 
-  # Create a GitHub Release with all artifacts when a tag is pushed
+      # ── Linux artifacts ──────────────────────────────────────────────────
+      - name: Upload DEB (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portpal-${{ matrix.artifact-suffix }}-deb
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+          if-no-files-found: error
+
+      - name: Upload AppImage (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portpal-${{ matrix.artifact-suffix }}-appimage
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+  # ── Publish all packages to GHCR as OCI artifacts ───────────────────────
+  publish-ghcr:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Install ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version tag
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME:-edge}" >> $GITHUB_OUTPUT
+
+      - name: Push packages to GHCR
+        working-directory: artifacts
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          REPO="ghcr.io/${{ github.repository_owner }}/portpal"
+
+          push() {
+            local label="$1" file="$2" mediatype="$3"
+            echo "→ Pushing $label"
+            oras push "${REPO}:${TAG}-${label}" "${file}:${mediatype}"
+            oras tag "${REPO}:${TAG}-${label}" "latest-${label}"
+          }
+
+          push "windows-x64-msi"     portpal-windows-x64-msi/*.msi                application/vnd.portpal.installer
+          push "windows-x64-setup"   portpal-windows-x64-setup/*.exe               application/vnd.portpal.installer
+          push "macos-arm64"         portpal-macos-arm64-dmg/*.dmg                 application/vnd.portpal.installer
+          push "macos-x64"           portpal-macos-x64-dmg/*.dmg                   application/vnd.portpal.installer
+          push "linux-x64-deb"       portpal-linux-x64-deb/*.deb                   application/vnd.portpal.installer
+          push "linux-x64-appimage"  portpal-linux-x64-appimage/*.AppImage         application/vnd.portpal.installer
+
+  # ── Create GitHub Release when a tag is pushed ───────────────────────────
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
@@ -95,7 +181,9 @@ jobs:
           make_latest: true
           generate_release_notes: true
           files: |
-            artifacts/portpal-windows-msi/*.msi
-            artifacts/portpal-windows-setup/*.exe
-            artifacts/portpal-macos-aarch64-apple-darwin-dmg/*.dmg
-            artifacts/portpal-macos-x86_64-apple-darwin-dmg/*.dmg
+            artifacts/portpal-windows-x64-msi/*.msi
+            artifacts/portpal-windows-x64-setup/*.exe
+            artifacts/portpal-macos-arm64-dmg/*.dmg
+            artifacts/portpal-macos-x64-dmg/*.dmg
+            artifacts/portpal-linux-x64-deb/*.deb
+            artifacts/portpal-linux-x64-appimage/*.AppImage
