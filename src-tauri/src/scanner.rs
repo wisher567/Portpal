@@ -76,10 +76,10 @@ fn scan_windows(sys: &System) -> Vec<PortInfo> {
             if !p_name.trim().is_empty() {
                 process_name = p_name;
             }
-            
+
             let cmd_arr = process.cmd();
             let cmd_str = cmd_arr.join(" ");
-            
+
             if !cmd_str.trim().is_empty() {
                 start_cmd = Some(cmd_str.trim().to_string());
             }
@@ -87,7 +87,7 @@ fn scan_windows(sys: &System) -> Vec<PortInfo> {
             if let Some(cwd) = process.cwd() {
                 project_path = find_project_root(cwd).map(|p| p.to_string_lossy().to_string());
             }
-            
+
             if project_path.is_none() {
                 if let Some(exe) = process.exe() {
                     if let Some(parent) = exe.parent() {
@@ -145,7 +145,11 @@ fn scan_unix(sys: &System) -> Vec<PortInfo> {
             Err(_) => continue,
         };
 
-        let name = parts[parts.len() - 1];
+        let mut idx = parts.len() - 1;
+        if parts[idx].starts_with('(') {
+            idx -= 1;
+        }
+        let name = parts[idx];
         let port: u16 = match name.rsplit(':').next()
             .and_then(|p| p.parse().ok()) {
             Some(p) => p,
