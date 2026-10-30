@@ -162,6 +162,19 @@ PortPal auto-detects these frameworks out-of-the-box:
 
 ---
 
+## 🎒 Portable Version (No Installation Required)
+
+If you don't want to install Node.js, Rust, or use an installer, you can download a fully portable version of PortPal!
+
+1. Head over to the [Releases page](https://github.com/wisher567/Portpal/releases).
+2. Download the appropriate file for your system:
+   - **Windows:** Download `portpal.exe` (Requires [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) which is pre-installed on most Windows 10/11 PCs).
+   - **Linux:** Download the `.AppImage` file. Remember to make it executable (`chmod +x portpal_*.AppImage`) before running.
+3. Double-click and run! No installation needed.
+
+---
+
+
 ## 🤝 Contributing
 
 Contributions are heavily welcomed to make PortPal even more intelligent.
